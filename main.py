@@ -1,53 +1,67 @@
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.common.action_chains import ActionChains
-from selenium.common.exceptions import NoSuchElementException
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
+from bs4 import BeautifulSoup
+import requests
 import json
-from time import sleep
+from html import unescape
 
-service = Service("C:\Development\chromedriver.exe")
-driver = webdriver.Chrome(service=service)
-driver.get("https://kbdfans.com/collections/switches")
-action = ActionChains(driver)
-sleep(5)
+root = "https://kbdfans.com"
+switchesPage = "/collections/switches"
+headers = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.127 Safari/537.36",
+    "Accept-Language": "en-US"
+}
 
-driver.find_element(By.CSS_SELECTOR, ".cc-popup-close").click()
-switchList = {}
-pageList = driver.find_elements(By.CSS_SELECTOR, ".pagination .page")
-for i in range(len(pageList)):
-    try:
-        productList = driver.find_elements(By.CSS_SELECTOR, "#gf-products .product-block .product-block__title a")
-        for n in range(len(productList)):
-            action.key_down(Keys.CONTROL).click(productList[n]).key_up(Keys.CONTROL).perform()
-            if len(driver.window_handles) > 1:
-                driver.switch_to.window(driver.window_handles[1])
-                try:
-                    productNameElement = WebDriverWait(driver, 10).until(
-                        EC.presence_of_element_located((By.CLASS_NAME, "product-detail__title"))
-                    )
-                    productName = productNameElement.text
-                    productPrice = driver.find_element(By.CLASS_NAME, "theme-money").text
-                    specs = driver.find_elements(By.CSS_SELECTOR, "#tab1 ul li")
-                    productSpecs = [spec.text for spec in specs]
+response = requests.get(f"{root}{switchesPage}", headers=headers)
+soup = BeautifulSoup(response.text, "html.parser")
 
-                    switchList[n] = {
-                        "name": productName,
-                        "price": productPrice,
-                        "specs": productSpecs,
-                    }
-                except:
-                    continue
-                driver.close()
-                driver.switch_to.window(driver.window_handles[0])
-        if not (i == len(pageList) - 1):
-            driver.find_element(By.CSS_SELECTOR, ".pagination .next a").click()
-            sleep(1)
-    except NoSuchElementException:
-        continue
-driver.quit()
+# Gets the total page count and grabs their links
+pages = soup.find_all(name="span", class_="page")
+pageLinks = [switchesPage]
+for page in pages[1:]:
+    link = page.find("a", href=True)['href']
+    pageLinks.append(link)
+print("Pages grabbed")
+
+switchesProducts = {}  # data to be transferred to json
+productNo = 0  # basically the iteration
+
+# Goes through each page
+for page in pageLinks:
+    # Switches to page number
+    response = requests.get(f"{root}{page}")
+    soup = BeautifulSoup(response.text, "html.parser")
+    print("Page number reached")
+
+    # Finds and grabs links for all products on page
+    products = soup.find_all(name="div", class_="product-block")
+    links = []
+    for product in products:
+        divLink = product.find_next(name="div", class_="product-block__title")
+        link = divLink.find("a", href=True)['href']
+        links.append(link)
+    print("Product links grabbed")
+
+    for link in links:
+        # Switches to product page
+        response = requests.get(f"{root}{link}")
+        soup = BeautifulSoup(response.text, "html.parser")
+        # Scrapes product data
+        productTitle = soup.find(name="h1", class_="product-detail__title").text
+        productPrice = soup.find(name="span", class_="theme-money").text
+        divSpecs = soup.find(name="div", id="tab1")
+        specs = divSpecs.find_next(name="ul").find_all("li")
+        productSpecs = [unescape(spec.text).replace(u'\xa0', ' ').replace('\n', '') for spec in specs]
+
+        # Store into dictionary
+        switchesProducts[productNo] = {
+            "link": f"{root}{link}",
+            "name": productTitle,
+            "price": productPrice,
+            "specs": productSpecs,
+        }
+        productNo += 1
+        print("Product specs stored")
+    print("All product specs stored for this page number")
+print("All data scraped")
 with open('data.json', 'w', encoding='utf-8') as f:
-    json.dump(switchList, f, ensure_ascii=False, indent=4)
+    json.dump(switchesProducts, f, ensure_ascii=False, indent=4)
+print("Data written to JSON")
